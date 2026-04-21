@@ -1,0 +1,13 @@
+data_root: "E:/004_북한법"
+master_list: "E:/004_북한법/북한법령_마스터목록.json"
+nis_text_dir: "E:/004_북한법/국정원2024/변환텍스트"
+mobu_text_dir: "E:/004_북한법/법무부/변환텍스트"
+output_repo: "E:/004_북한법/legalize-kp"
+output_kp_dir: "E:/004_북한법/legalize-kp/kp"
+git_author_name: "legalize-kp-bot"
+git_author_email: "bot@legalize-kp.org"
+git_timezone: "+09:00"
+constitutional_names:
+  - "사회주의헌법"
+  - "조선로동당규약"
+  - "당의유일적령도체계확립의 10대 원칙"
