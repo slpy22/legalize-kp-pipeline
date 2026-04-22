@@ -55,8 +55,15 @@ def build_history(repo_path: str, commits: list[CommitEntry]) -> None:
         repo.index.add([rel_path])
 
         # Build commit timestamp: YYYY-MM-DDT12:00:00+09:00
-        year, month, day = map(int, entry.date.split("-"))
-        dt = datetime(year, month, day, 12, 0, 0, tzinfo=KST)
+        # 날짜가 없거나 잘못된 경우 1970-01-01 사용 (Git 호환 최소 날짜)
+        try:
+            parts = entry.date.split("-")
+            year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+            if year < 1970:
+                year = 1970  # Git은 음수 타임스탬프를 badDate로 처리
+            dt = datetime(year, month, day, 12, 0, 0, tzinfo=KST)
+        except (ValueError, IndexError):
+            dt = datetime(1970, 1, 1, 12, 0, 0, tzinfo=KST)
 
         # Pass the datetime object directly — GitPython's parse_date handles
         # aware datetime instances correctly; ISO strings with colon-tz offsets
