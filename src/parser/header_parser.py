@@ -59,9 +59,9 @@ class HeaderInfo:
 #   group 4 — day   (1–2 digits)
 #   group 5 — the rest up to 채택 or 수정보충 (the basis + action)
 _AMENDMENT_RE = re.compile(
-    r'주체(\d+)\((\d{4})\)년\s*\n?\s*'   # 주체NN(YYYY)년  [optional newline]
-    r'(\d{1,2})월\s*(\d{1,2})일\s+'       # MM월 DD일
-    r'(.+?(?:채택|수정보충))',             # basis + action
+    r'주체(\d+)\((\d{4})\)년\s*\n?\s*'                       # 주체NN(YYYY)년  [optional newline]
+    r'(\d{1,2})월\s*(\d{1,2})(?:\s*[~∼−–-]\s*\d{1,2})?일\s+'  # MM월 DD일 또는 DD~DD일 (범위)
+    r'(.+?(?:채택|수정보충))',                                 # basis + action
     re.DOTALL
 )
 

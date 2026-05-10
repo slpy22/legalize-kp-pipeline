@@ -34,19 +34,31 @@ CONSTITUTIONAL_NAMES: set = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+_DATE_IN_FILENAME_RE = re.compile(
+    r"\(\s*(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\s*(?:-\s*(\d{1,2}))?\s*\.?\s*\)"
+)
+
+
 def _extract_date_from_filename(filename: str) -> Optional[str]:
     """
     Extract an ISO date string from a MOBU filename.
 
     Patterns handled:
-      과학기술법(2013.10.23.).txt  →  2013-10-23
-      테스트법(2005.3.9.).txt      →  2005-03-09
+      과학기술법(2013.10.23.).txt          → 2013-10-23
+      테스트법(2005.3.9.).txt              → 2005-03-09
+      헌법(2023.9.26-27.).txt              → 2023-09-27  (range, later day)
+      행정처벌법(2020. 12. 18.).txt        → 2020-12-18  (with spaces)
+      사회주의헌법(2016.06.29).txt          → 2016-06-29  (no trailing dot)
     """
-    match = re.search(r"\((\d{4})\.(\d{1,2})\.(\d{1,2})\.?\)", filename)
-    if match:
-        year, month, day = match.group(1), match.group(2), match.group(3)
-        return f"{year}-{int(month):02d}-{int(day):02d}"
-    return None
+    match = _DATE_IN_FILENAME_RE.search(filename)
+    if not match:
+        return None
+    year = int(match.group(1))
+    month = int(match.group(2))
+    day1 = int(match.group(3))
+    day2 = int(match.group(4)) if match.group(4) else day1
+    day = max(day1, day2)
+    return f"{year}-{month:02d}-{day:02d}"
 
 
 def _read_text(path: str) -> str:
@@ -182,23 +194,42 @@ def merge_sources(
         mobu_info = mobu_files.get(entry.name)
 
         # ── Current version ────────────────────────────────────────────────
-        if nis_info and nis_info["current"]:
-            text = _read_text(nis_info["current"])
-            date = entry.latest_version_date or ""
+        # NIS와 MOBU 둘 다 있으면 더 최신 날짜를 갖는 쪽을 본문으로 사용.
+        nis_path = nis_info["current"] if nis_info else None
+        mobu_path = mobu_info["current"] if mobu_info else None
+
+        mobu_date = (
+            _extract_date_from_filename(Path(mobu_path).name) if mobu_path else None
+        )
+        nis_date = entry.latest_version_date or ""
+
+        use_mobu = bool(mobu_path) and (
+            not nis_path or (mobu_date and mobu_date > nis_date)
+        )
+
+        if use_mobu and mobu_path:
+            text = _read_text(mobu_path)
             versions.append(LawVersion(
-                date=date,
+                date=mobu_date or nis_date,
+                action="수정보충",
+                source="mobu",
+                text=text,
+                text_available=True,
+            ))
+        elif nis_path:
+            text = _read_text(nis_path)
+            versions.append(LawVersion(
+                date=nis_date,
                 action="수정보충",
                 source="nis",
                 text=text,
                 text_available=True,
             ))
-        elif mobu_info and mobu_info["current"]:
-            text = _read_text(mobu_info["current"])
-            date = _extract_date_from_filename(
-                Path(mobu_info["current"]).name
-            ) or entry.latest_version_date or ""
+        elif mobu_path:
+            # NIS 없고 MOBU만 있는 케이스 (위 use_mobu에서 안 잡힐 일은 없지만 안전망)
+            text = _read_text(mobu_path)
             versions.append(LawVersion(
-                date=date,
+                date=mobu_date or nis_date,
                 action="수정보충",
                 source="mobu",
                 text=text,

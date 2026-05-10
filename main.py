@@ -102,16 +102,17 @@ def _process_version(
     # enactment_basis: last amendment's .basis field
     enactment_basis = header.amendments[-1].basis if header.amendments else ""
 
+    # Store enactment_basis on the version object BEFORE building frontmatter
+    # so generate_frontmatter (which scans entry.versions in reverse) picks
+    # up the latest version's basis instead of an older one.
+    version.enactment_basis = enactment_basis
+
     frontmatter_str = generate_frontmatter(
         entry,
         amendments=amendments_dicts,
         source=version.source,
         is_authentic=(version.source == "nis"),
     )
-
-    # Store enactment_basis on the version object so generate_frontmatter
-    # can pick it up from entry.versions when called via write_law_file
-    version.enactment_basis = enactment_basis
 
     body_md = generate_markdown(tree)
     # If structure parser found no nodes, use the raw body text as-is
