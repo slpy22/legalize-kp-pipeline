@@ -143,13 +143,14 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False) -> No
     master_path: str = cfg["master_list"]
     nis_dir: str = cfg["nis_text_dir"]
     mobu_dir: str = cfg["mobu_text_dir"]
+    unification_dir: str | None = cfg.get("unification_text_dir")
     output_repo: str = cfg["output_repo"]
     output_kp_dir: str = cfg["output_kp_dir"]
     constitutional_names: list[str] = cfg.get("constitutional_names", [])
 
     # ── Phase 1: Merge sources ─────────────────────────────────────────────
     print("\n[Phase 1] 소스 병합 중...")
-    entries = merge_sources(master_path, nis_dir, mobu_dir)
+    entries = merge_sources(master_path, nis_dir, mobu_dir, unification_dir)
     print(f"  → 법령 {len(entries)}건 로드")
 
     # ── Phase 2-3: Process each entry / version ────────────────────────────

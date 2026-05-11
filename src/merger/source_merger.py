@@ -24,6 +24,7 @@ from src.models import LawEntry, LawVersion
 # ---------------------------------------------------------------------------
 
 CONSTITUTIONAL_NAMES: set = {
+    "조선민주주의인민공화국 헌법",
     "사회주의헌법",
     "조선로동당규약",
     "당의유일적령도체계확립의 10대 원칙",
@@ -102,9 +103,11 @@ def load_master_list(master_path: str) -> list[LawEntry]:
             has_appendix=law.get("has_appendix", False),
             in_nis=bool(law.get("in_nis2024", False)),
             in_mobu=bool(law.get("in_mobu", False)),
+            in_unification=bool(law.get("in_unification", False)),
             nis_volume=law.get("nis_volume"),
             nis_page=law.get("nis_page"),
             mobu_files=list(law.get("mobu_files", [])),
+            former_names=list(law.get("former_names") or []),
             is_constitutional=name in CONSTITUTIONAL_NAMES,
         )
         entries.append(entry)
@@ -169,72 +172,106 @@ def find_text_files(text_dir: str) -> dict:
 # merge_sources
 # ---------------------------------------------------------------------------
 
+def _lookup(files_dict: dict, entry: LawEntry):
+    """현 이름 + former_names 별칭으로 find_text_files 결과 탐색."""
+    info = files_dict.get(entry.name)
+    if info is not None:
+        return info
+    for alias in entry.former_names:
+        info = files_dict.get(alias)
+        if info is not None:
+            return info
+    return None
+
+
 def merge_sources(
     master_path: str,
     nis_dir: str,
     mobu_dir: str,
+    unification_dir: str | None = None,
 ) -> list[LawEntry]:
     """
-    Load master list and combine NIS + MOBU text files into LawEntry.versions.
+    Load master list and combine NIS + MOBU + (선택) 통일부 텍스트를 LawEntry.versions 로 통합.
 
-    Version selection:
-      - Current: NIS if available, else MOBU
-      - Previous versions: always from MOBU 이전버전
+    Version selection priority:
+      1. unification (통일부 발표 자료) — 가장 새로 입수한 출처
+      2. NIS/MOBU 중 더 최신 일자 — 기존 로직
+      3. 이전버전: MOBU의 이전버전 폴더
 
+    NIS/MOBU 텍스트는 entry.name 또는 former_names 별칭으로 매칭(법명 변경 대응).
     Versions are sorted by date (ascending) before being attached.
     """
     entries = load_master_list(master_path)
     nis_files = find_text_files(nis_dir)
     mobu_files = find_text_files(mobu_dir)
+    uni_files = find_text_files(unification_dir) if unification_dir else {}
 
     for entry in entries:
         versions: list[LawVersion] = []
 
-        nis_info = nis_files.get(entry.name)
-        mobu_info = mobu_files.get(entry.name)
+        nis_info = _lookup(nis_files, entry)
+        mobu_info = _lookup(mobu_files, entry)
+        uni_info = _lookup(uni_files, entry)
 
         # ── Current version ────────────────────────────────────────────────
-        # NIS와 MOBU 둘 다 있으면 더 최신 날짜를 갖는 쪽을 본문으로 사용.
+        # 통일부 > (MOBU·NIS 중 더 최신 일자) 순. 같은 출처들 내에서는 파일명 일자 기준.
+        uni_path = uni_info["current"] if uni_info else None
         nis_path = nis_info["current"] if nis_info else None
         mobu_path = mobu_info["current"] if mobu_info else None
 
+        uni_date = (
+            _extract_date_from_filename(Path(uni_path).name) if uni_path else None
+        )
         mobu_date = (
             _extract_date_from_filename(Path(mobu_path).name) if mobu_path else None
         )
         nis_date = entry.latest_version_date or ""
 
-        use_mobu = bool(mobu_path) and (
-            not nis_path or (mobu_date and mobu_date > nis_date)
-        )
+        if uni_path:
+            text = _read_text(uni_path)
+            versions.append(LawVersion(
+                date=uni_date or entry.latest_version_date or "",
+                action="수정보충",
+                source="unification",
+                text=text,
+                text_available=True,
+            ))
+        else:
+            use_mobu = bool(mobu_path) and (
+                not nis_path or (mobu_date and mobu_date > nis_date)
+            )
+            if use_mobu and mobu_path:
+                text = _read_text(mobu_path)
+                versions.append(LawVersion(
+                    date=mobu_date or nis_date,
+                    action="수정보충",
+                    source="mobu",
+                    text=text,
+                    text_available=True,
+                ))
+            elif nis_path:
+                text = _read_text(nis_path)
+                versions.append(LawVersion(
+                    date=nis_date,
+                    action="수정보충",
+                    source="nis",
+                    text=text,
+                    text_available=True,
+                ))
+            elif mobu_path:
+                text = _read_text(mobu_path)
+                versions.append(LawVersion(
+                    date=mobu_date or nis_date,
+                    action="수정보충",
+                    source="mobu",
+                    text=text,
+                    text_available=True,
+                ))
 
-        if use_mobu and mobu_path:
-            text = _read_text(mobu_path)
-            versions.append(LawVersion(
-                date=mobu_date or nis_date,
-                action="수정보충",
-                source="mobu",
-                text=text,
-                text_available=True,
-            ))
-        elif nis_path:
-            text = _read_text(nis_path)
-            versions.append(LawVersion(
-                date=nis_date,
-                action="수정보충",
-                source="nis",
-                text=text,
-                text_available=True,
-            ))
-        elif mobu_path:
-            # NIS 없고 MOBU만 있는 케이스 (위 use_mobu에서 안 잡힐 일은 없지만 안전망)
-            text = _read_text(mobu_path)
-            versions.append(LawVersion(
-                date=mobu_date or nis_date,
-                action="수정보충",
-                source="mobu",
-                text=text,
-                text_available=True,
-            ))
+        # 통일부 본이 현행이 되면 NIS/MOBU 현행은 별도 등록하지 않는다.
+        # (이전 amendment 본문은 MOBU의 이전버전 폴더에서 가져옴.
+        #  NIS/MOBU 현행은 master의 latest_version_date를 그대로 사용하므로
+        #  통일부 본과 일자가 겹쳐 정렬 모호성을 만들 수 있어 제외.)
 
         # ── Previous versions (MOBU 이전버전) ─────────────────────────────
         if mobu_info:

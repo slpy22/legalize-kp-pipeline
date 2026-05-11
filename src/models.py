@@ -35,10 +35,12 @@ class LawEntry:
     has_appendix: bool = False
     in_nis: bool = False
     in_mobu: bool = False
+    in_unification: bool = False
     nis_volume: Optional[int] = None
     nis_page: Optional[int] = None
     mobu_key: Optional[str] = None
     mobu_files: List[str] = field(default_factory=list)
+    former_names: List[str] = field(default_factory=list)
     is_constitutional: bool = False
     is_ocr: bool = False
     ocr_confidence: Optional[float] = None
