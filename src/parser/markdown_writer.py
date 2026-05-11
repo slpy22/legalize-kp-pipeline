@@ -90,6 +90,10 @@ def generate_frontmatter(
     data["개정횟수"] = entry.amendment_count
     data["출처"] = source
 
+    # 옛 명칭(별칭) — 외부 검색·옛 URL 매칭용
+    if entry.former_names:
+        data["옛이름"] = list(entry.former_names)
+
     # NIS fields
     if entry.nis_volume is not None:
         data["국정원권"] = entry.nis_volume
