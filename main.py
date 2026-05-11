@@ -133,7 +133,7 @@ def _process_version(
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False) -> None:
+def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False, emit_versions: Optional[str] = None) -> None:
     """Execute the full legalize-kp pipeline."""
 
     # ── Load config ────────────────────────────────────────────────────────
@@ -188,6 +188,26 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False) -> No
             print(f"  진행: {processed}/{len(entries)} 법령 처리 완료")
 
     print(f"  → 총 {len(commits)}건 커밋 엔트리 생성, 실패 {len(failures)}건")
+
+    # ── (선택) 모든 버전 dump — DB law_versions 적재용 ───────────────────────
+    if emit_versions:
+        print(f"\n[emit-versions] {len(commits)}개 버전 → {emit_versions}")
+        with open(emit_versions, "w", encoding="utf-8") as f:
+            json.dump(
+                [
+                    {
+                        "law_name": c.law_name,
+                        "version_date": c.date,
+                        "action": c.action,
+                        "file_path": c.file_path,
+                        "markdown": c.content,
+                    }
+                    for c in commits
+                ],
+                f,
+                ensure_ascii=False,
+            )
+        print(f"  → 저장 완료")
 
     # ── Phase 4: Build git history or write files directly ─────────────────
     if not skip_git:
@@ -260,13 +280,23 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Git 히스토리 생성 없이 파일만 출력합니다.",
     )
+    parser.add_argument(
+        "--emit-versions",
+        default=None,
+        metavar="PATH",
+        help="모든 버전(법령×개정일자)의 markdown 본문을 JSON으로 dump (DB law_versions 적재용)",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[list[str]] = None) -> None:
     """CLI entry point."""
     args = _parse_args(argv)
-    run_pipeline(config_path=args.config, skip_git=args.skip_git)
+    run_pipeline(
+        config_path=args.config,
+        skip_git=args.skip_git,
+        emit_versions=args.emit_versions,
+    )
 
 
 if __name__ == "__main__":

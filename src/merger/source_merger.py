@@ -268,10 +268,19 @@ def merge_sources(
                     text_available=True,
                 ))
 
-        # 통일부 본이 현행이 되면 NIS/MOBU 현행은 별도 등록하지 않는다.
-        # (이전 amendment 본문은 MOBU의 이전버전 폴더에서 가져옴.
-        #  NIS/MOBU 현행은 master의 latest_version_date를 그대로 사용하므로
-        #  통일부 본과 일자가 겹쳐 정렬 모호성을 만들 수 있어 제외.)
+        # 통일부 본이 현행이면 MOBU current는 별도 이전버전 entry로 보존
+        # (역사 기록용). 파일명에서 추출한 정확한 일자(mobu_date)가 unification과
+        # 다를 때만 추가 — 같은 일자면 중복이 되므로 생략. NIS current는 일자
+        # 정보가 master.latest_version_date 외에 없어 일자 충돌 위험이 있으므로
+        # 별도 추가하지 않는다.
+        if uni_path and mobu_path and mobu_date and mobu_date != uni_date:
+            versions.append(LawVersion(
+                date=mobu_date,
+                action="수정보충",
+                source="mobu",
+                text=_read_text(mobu_path),
+                text_available=True,
+            ))
 
         # ── Previous versions (MOBU 이전버전) ─────────────────────────────
         if mobu_info:
