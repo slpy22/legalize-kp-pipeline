@@ -35,8 +35,10 @@ CONSTITUTIONAL_NAMES: set = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+# 괄호 안의 날짜. 월·일은 선택적이며, 날짜 뒤 부가어(채택/제정/승인 등)나
+# 닫는 괄호 누락도 허용한다. 연도만으로도 매칭된다.
 _DATE_IN_FILENAME_RE = re.compile(
-    r"\(\s*(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\s*(?:-\s*(\d{1,2}))?\s*\.?\s*\)"
+    r"\(\s*(\d{4})(?:\.\s*(\d{1,2}))?(?:\.\s*(\d{1,2}))?(?:\s*[-~∼–]\s*(\d{1,2}))?"
 )
 
 
@@ -45,20 +47,29 @@ def _extract_date_from_filename(filename: str) -> Optional[str]:
     Extract an ISO date string from a MOBU filename.
 
     Patterns handled:
-      과학기술법(2013.10.23.).txt          → 2013-10-23
-      테스트법(2005.3.9.).txt              → 2005-03-09
-      헌법(2023.9.26-27.).txt              → 2023-09-27  (range, later day)
-      행정처벌법(2020. 12. 18.).txt        → 2020-12-18  (with spaces)
-      사회주의헌법(2016.06.29).txt          → 2016-06-29  (no trailing dot)
+      과학기술법(2013.10.23.).txt              → 2013-10-23
+      테스트법(2005.3.9.).txt                  → 2005-03-09
+      헌법(2023.9.26-27.).txt                  → 2023-09-27  (range, later day)
+      행정처벌법(2020. 12. 18.).txt            → 2020-12-18  (with spaces)
+      사회주의헌법(2016.06.29).txt              → 2016-06-29  (no trailing dot)
+      조선로동당 규약(2021.1).txt              → 2021-01-01  (월만, 일 없음)
+      문화유물보호법(2011).txt                 → 2011-01-01  (연도만)
+      과학기술인재관리법(2023.4.11. 채택).txt   → 2023-04-11  (부가어 '채택')
+      회계법(2003.3.26. 제정).txt              → 2003-03-26  (부가어 '제정')
+      지방예산법(2012.12.19                     → 2012-12-19  (닫는 괄호 누락)
+      도시경영법(1992.1.29. 채택, 1992.4. 9...)→ 1992-01-29  (첫 날짜=채택일)
     """
     match = _DATE_IN_FILENAME_RE.search(filename)
     if not match:
         return None
     year = int(match.group(1))
-    month = int(match.group(2))
-    day1 = int(match.group(3))
+    month = int(match.group(2)) if match.group(2) else 1
+    day1 = int(match.group(3)) if match.group(3) else 1
     day2 = int(match.group(4)) if match.group(4) else day1
     day = max(day1, day2)
+    # 잘못 파싱된 월/일 방어
+    if not (1 <= month <= 12) or not (1 <= day <= 31):
+        return None
     return f"{year}-{month:02d}-{day:02d}"
 
 
@@ -300,5 +311,14 @@ def merge_sources(
         versions.sort(key=lambda v: v.date or "")
 
         entry.versions = versions
+
+        # ── latest_version_date 보정 ────────────────────────────────────────
+        # 마스터 목록이 최신본 일자를 누락/오기한 경우(예: 당규약 2021.1 본을
+        # 못 잡고 2016.5.9 로 기록), 실제 보유한 버전 중 최신 일자로 끌어올린다.
+        dated = [v.date for v in versions if v.date]
+        if dated:
+            newest = max(dated)
+            if not entry.latest_version_date or newest > entry.latest_version_date:
+                entry.latest_version_date = newest
 
     return entries
