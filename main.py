@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -91,6 +92,20 @@ def _process_version(
 
     # Extract body text starting from header.body_start_index
     body_text = normalized[header.body_start_index:]
+
+    # 서문(헌법 등) 추출 — "서 문" ~ 첫 "제N장" 사이를 별도로 보존.
+    # structure_parser 가 "제N장/제N조"만 트리로 만들어 서문 내용이 버려지므로
+    # 여기서 미리 분리해 두고 markdown 앞에 prepend 한다.
+    preamble_md = ""
+    pre_m = re.search(r"^\s*서\s*문\s*\n+(.+?)(?=\n\s*제\s*\d+\s*장)",
+                       body_text, re.DOTALL | re.MULTILINE)
+    if pre_m:
+        preamble_body = pre_m.group(1).strip()
+        if preamble_body:
+            preamble_md = f"## 서 문\n\n{preamble_body}\n\n"
+        # 구조 파서엔 서문 다음(제1장 시작)부터 전달
+        body_text = body_text[pre_m.end():]
+
     tree = parse_structure(body_text)
 
     # Build amendments list for frontmatter (list of dicts)
@@ -118,6 +133,9 @@ def _process_version(
     # If structure parser found no nodes, use the raw body text as-is
     if not body_md.strip() and body_text.strip():
         body_md = body_text.strip()
+    # 서문이 있으면 본문 앞에 합친다
+    if preamble_md:
+        body_md = preamble_md + body_md
     content = f"---\n{frontmatter_str}---\n\n{body_md}\n"
 
     return CommitEntry(
