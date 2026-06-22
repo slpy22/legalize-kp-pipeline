@@ -52,16 +52,17 @@ class HeaderInfo:
 # Regex for 주체 year lines, tolerating optional whitespace/newline between
 # 년 and the month.
 #
-# Captures:
-#   group 1 — juche year (digits)
-#   group 2 — western year in parentheses (digits, used as cross-check)
+# Captures (주체 형식 또는 평년 형식 모두 허용):
+#   group 1 — 주체 형식의 서기년도(괄호 안), 평년 형식이면 None
+#   group 2 — 평년 형식의 서기년도, 주체 형식이면 None
 #   group 3 — month (1–2 digits)
 #   group 4 — day   (1–2 digits)
-#   group 5 — the rest up to 채택 or 수정보충 (the basis + action)
+#   group 5 — the rest up to 채택/수정보충/수정/승인/제정 (the basis + action)
+# ※ 본문 오탐 방지를 위해 parse_header 는 이 정규식을 '헤더 영역'에만 적용한다.
 _AMENDMENT_RE = re.compile(
-    r'주체(\d+)\((\d{4})\)년\s*\n?\s*'                       # 주체NN(YYYY)년  [optional newline]
-    r'(\d{1,2})월\s*(\d{1,2})(?:\s*[~∼−–-]\s*\d{1,2})?일\s+'  # MM월 DD일 또는 DD~DD일 (범위)
-    r'(.+?(?:채택|수정보충))',                                 # basis + action
+    r'(?:주체\s*\d+\s*\(\s*(\d{4})\s*\)|(\d{4}))\s*년\s*\n?\s*'      # 주체NN(YYYY)년  또는  YYYY년
+    r'(\d{1,2})\s*월\s*(\d{1,2})(?:\s*[~∼−–-]\s*\d{1,2})?\s*일\s+'  # MM 월 DD 일 또는 DD~DD일 (공백 허용)
+    r'(.+?(?:채택|수정보충|수정|승인|제정))',                       # basis + action (수정/승인/제정 추가)
     re.DOTALL
 )
 
@@ -130,11 +131,17 @@ def parse_header(text: str) -> HeaderInfo:
     """
     law_name = _extract_law_name(text)
 
+    # --- Find body start index (먼저 계산: 개정일 검색을 헤더 영역으로 한정) ---
+    body_match = _BODY_START_RE.search(text)
+    body_start_index = body_match.start() if body_match else 0
+    # 헤더 영역(본문 시작 전)만 스캔 — 평년형식 허용에 따른 본문 오탐 방지.
+    header_region = text[:body_start_index] if body_start_index else text
+
     # --- Find amendments ---
     amendments: List[Amendment] = []
-    for m in _AMENDMENT_RE.finditer(text):
-        juche_year = int(m.group(1))
-        western_year = int(m.group(2))  # already provided in parentheses
+    for m in _AMENDMENT_RE.finditer(header_region):
+        # 주체 형식이면 group(1), 평년 형식이면 group(2) 에 서기년도가 들어 있다.
+        western_year = int(m.group(1) or m.group(2))
         month = int(m.group(3))
         day = int(m.group(4))
         raw_rest = m.group(5)
@@ -153,10 +160,6 @@ def parse_header(text: str) -> HeaderInfo:
 
     # Sort by date string (ISO-8601 sorts lexicographically)
     amendments.sort(key=lambda a: a.date)
-
-    # --- Find body start index ---
-    body_match = _BODY_START_RE.search(text)
-    body_start_index = body_match.start() if body_match else 0
 
     return HeaderInfo(
         law_name=law_name,

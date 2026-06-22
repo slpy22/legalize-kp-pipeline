@@ -106,6 +106,29 @@ def _process_version(
         # 구조 파서엔 서문 다음(제1장 시작)부터 전달
         body_text = body_text[pre_m.end():]
 
+    # 첫 '제N장' 이전 영역에 조문이 있으면(=제1장이 명시 안 된 법령),
+    # 그 조문들을 직접 markdown 형식으로 변환해 prepend 한다.
+    # (parse_structure 는 '제N장' 컨테이너 밖의 조문을 트리에 못 담는 한계 우회)
+    head_md = ""
+    first_ch = re.search(r"^\s*제\s*\d+\s*장", body_text, re.MULTILINE)
+    if first_ch and first_ch.start() > 0:
+        head = body_text[:first_ch.start()].strip()
+        if re.search(r"제\s*\d+\s*조", head):
+            head_md = "## 제1장 일반규정\n"
+            for m in re.finditer(
+                r"제\s*(\d+)\s*조[\s_]*(?:\(([^)]+)\))?\s*(.+?)(?=\n\s*제\s*\d+\s*조|\Z)",
+                head, re.DOTALL,
+            ):
+                num = m.group(1)
+                title = (m.group(2) or "").strip()
+                content = re.sub(r"\s+", " ", m.group(3).strip())
+                head_md += f"##### 제{num}조"
+                if title:
+                    head_md += f" ({title})"
+                head_md += f"\n{content}\n"
+            # 구조 파서엔 첫 장부터 전달 (중복 방지)
+            body_text = body_text[first_ch.start():]
+
     tree = parse_structure(body_text)
 
     # Build amendments list for frontmatter (list of dicts)
@@ -122,6 +145,33 @@ def _process_version(
     # up the latest version's basis instead of an older one.
     version.enactment_basis = enactment_basis
 
+    # 채택일 보충: master 에 enactment_date 가 없으면 파싱된 개정이력의 '채택'
+    # 항목(가장 이른 채택)에서 가져온다. 채택 항목 자체가 없으면 그대로 둔다.
+    if entry.enactment_date is None:
+        chae_date = next(
+            (a.date for a in header.amendments if a.action == "채택"), None
+        )
+        if chae_date:
+            entry.enactment_date = chae_date
+
+    # 본문 마크다운을 먼저 조립한다(조문수를 실제값으로 세기 위해).
+    body_md = generate_markdown(tree)
+    # If structure parser found no nodes, use the raw body text as-is
+    if not body_md.strip() and body_text.strip():
+        body_md = body_text.strip()
+    # 서문/첫 장 누락분이 있으면 본문 앞에 합친다 (순서: 서문 → 첫 장 조문 → 본문)
+    if preamble_md or head_md:
+        body_md = preamble_md + head_md + body_md
+
+    # 조문수 교정: master 목록값 대신 실제 생성된 '본문' 조문(##### 제N조) 수로
+    # 설정한다. 부칙(## 부칙)은 별도 보충규정이고 조번호도 재시작하므로 제외하여
+    # articles 테이블/통상적 의미(본문 조문수)와 일치시킨다.
+    _bu_m = re.search(r'(?m)^#+\s*부\s*칙', body_md)
+    _count_region = body_md[:_bu_m.start()] if _bu_m else body_md
+    actual_article_count = len(re.findall(r'(?m)^#{5}\s*제\d+조', _count_region))
+    if actual_article_count > 0:
+        entry.total_articles = actual_article_count
+
     frontmatter_str = generate_frontmatter(
         entry,
         amendments=amendments_dicts,
@@ -129,13 +179,6 @@ def _process_version(
         is_authentic=(version.source == "nis"),
     )
 
-    body_md = generate_markdown(tree)
-    # If structure parser found no nodes, use the raw body text as-is
-    if not body_md.strip() and body_text.strip():
-        body_md = body_text.strip()
-    # 서문이 있으면 본문 앞에 합친다
-    if preamble_md:
-        body_md = preamble_md + body_md
     content = f"---\n{frontmatter_str}---\n\n{body_md}\n"
 
     return CommitEntry(

@@ -13,10 +13,27 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
 from src.models import LawEntry, LawVersion
+from src.parser.header_parser import parse_header
+
+
+def _date_from_header(text: str) -> str:
+    """버전 텍스트의 헤더에서 가장 최신(마지막) 개정일을 ISO 문자열로 반환.
+
+    파일명·마스터목록에 날짜가 없는 버전(법무부 이전버전 등)의 시행일을
+    본문 헤더의 개정이력에서 보충하기 위한 폴백.
+    """
+    try:
+        info = parse_header(unicodedata.normalize("NFC", text))
+    except Exception:
+        return ""
+    if not info.amendments:
+        return ""
+    return max(a.date for a in info.amendments)
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +323,24 @@ def merge_sources(
                     text=text,
                     text_available=True,
                 ))
+
+        # ── 날짜 없는 버전: 헤더 개정이력에서 시행일 보충 ────────────────────
+        # 파일명/마스터목록에 일자가 없는 법무부 이전버전 등은 본문 헤더의
+        # 최신 개정일을 시행일로 사용한다.
+        for v in versions:
+            if not v.date:
+                v.date = _date_from_header(getattr(v, "text", "") or "")
+
+        # ── 같은 일자 중복 제거(텍스트가 더 완전한 쪽을 남김) ─────────────────
+        # 동일 법령에서 같은 시행일 버전이 둘 이상이면(파일명변형+이전버전 등)
+        # 본문이 가장 긴(완전한) 하나만 남긴다.
+        by_date: dict = {}
+        for v in versions:
+            key = v.date or ""
+            cur = by_date.get(key)
+            if cur is None or len(getattr(v, "text", "") or "") > len(getattr(cur, "text", "") or ""):
+                by_date[key] = v
+        versions = list(by_date.values())
 
         # ── Sort by date ───────────────────────────────────────────────────
         versions.sort(key=lambda v: v.date or "")

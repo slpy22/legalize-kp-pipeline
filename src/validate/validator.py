@@ -114,7 +114,10 @@ def validate_law_file(
         )
 
     # --- Article count -------------------------------------------------------
-    actual_articles = len(_ARTICLE_RE.findall(body))
+    # 부칙(## 부칙) 이후의 조문은 별도 보충규정이므로 본문 조문수에서 제외한다.
+    _bu = re.search(r"^#+\s*부\s*칙", body, re.MULTILINE)
+    _body_region = body[: _bu.start()] if _bu else body
+    actual_articles = len(_ARTICLE_RE.findall(_body_region))
 
     if expected_articles is not None:
         diff = abs(actual_articles - expected_articles)

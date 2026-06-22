@@ -44,13 +44,26 @@ _SECTION_RE = re.compile(r'^제(\d+)절\s+(.+)')       # 절
 _SUBSEC_RE  = re.compile(r'^제(\d+)관\s+(.+)')       # 관
 
 # Article: 제N조 (title)  — title may use ASCII or fullwidth parens
-_ARTICLE_RE = re.compile(r'^제(\d+)조\s*[\(（](.+?)[\)）]')
+# 조 번호와 제목 사이의 OCR 잡음(언더스코어 '_')도 허용 — main.py 의 장-이전 조문
+# 우회 regex(제\d+조[\s_]*)와 동일하게 맞춤.
+_ARTICLE_RE = re.compile(r'^제(\d+)조[\s_]*[\(（](.+?)[\)）]')
 
 # Article without parenthesized title: 제N조 content... or 제N조content...
-_ARTICLE_NOTITLE_RE = re.compile(r'^제(\d+)조(?:\s+|(?=[가-힣]))(.*)')
+#
+# 주의: '제N조' 바로 뒤(공백 없이)에 조사가 붙는 경우는 본문 속 '교차참조'
+# (예: "제46조의 행위에 대하여...", "제47조에 따라...")이므로 새 조문 헤더로
+# 오인하면 안 된다. 공백 없는 분기에서 조사로 시작하면 매치하지 않는다.
+#   - 공백/언더스코어가 있으면(제N조 내용) 정상 조문으로 본다.
+#   - 공백 없이 한글이 바로 오면(제2조대외경제중재법…) 조문이되, 조사 시작은 제외.
+_JOSA = r'의|에|를|을|은|는|이|가|와|과|로|및|도|만|나|란|며|부터|까지|에서|에게|보다|마다'
+_ARTICLE_NOTITLE_RE = re.compile(
+    r'^제(\d+)조(?:[\s_]+|(?=[가-힣])(?!(?:' + _JOSA + r')))(.*)'
+)
 
-# 부칙
-_APPENDIX_RE = re.compile(r'^부\s*칙')
+# 부칙 — 단, '부칙은/부칙을/부칙에...' 처럼 조사가 붙은 본문 문장은 부칙 섹션
+# 헤더가 아니므로 제외한다(예: 법제정법 제67조 "부칙은 해당 법문건의 시행과...").
+# 실제 부칙 헤더는 '부칙' 단독, '부칙 <날짜>', '부칙(...)' 형태로 뒤에 한글이 붙지 않는다.
+_APPENDIX_RE = re.compile(r'^부\s*칙(?![가-힣])')
 
 # Sub-article: 호 — indented digit + period or digit + space + content
 _HO_RE  = re.compile(r'^\s+(\d+)[.\s]\s*(.*)')
@@ -140,6 +153,56 @@ def _match_mok(raw_line: str) -> Optional[tuple[str, str]]:
     return None
 
 
+# 조 제목 줄바꿈 결합용: 여는 괄호 있고 닫는 괄호 없는 '제N조(' 헤더 줄 판별
+_ARTICLE_OPEN_RE = re.compile(r'^제(\d+)조[\s_]*[\(（]')
+# 결합을 중단해야 하는 새 구조 헤더(다음 조문/장 등 삼킴 방지)
+_STRUCT_HEADER_RE = re.compile(r'^(?:제\d+[조장절관편]|부\s*칙)')
+
+
+def _join_wrapped_article_titles(text: str, max_lookahead: int = 3) -> str:
+    """제목이 여러 줄로 끊긴 조 헤더를 한 줄로 결합한다.
+
+    예) '제5조(문화유물을 ... 보호관리할데 대한\n원칙)' → '제5조(... 대한 원칙)'
+    여는 괄호만 있고 닫는 괄호가 없는 '제N조(' 헤더 줄을, 닫는 괄호가 나오는
+    줄까지(최대 max_lookahead 줄) 공백으로 이어 붙인다.
+
+    안전장치:
+      - 닫는 괄호를 찾기 전에 새 구조 헤더(제N조/장/절/관/편/부칙)를 만나면
+        결합을 중단하고 원래 줄을 그대로 둔다(다음 조문을 삼키지 않음).
+        예) 제목 괄호가 OCR로 안 닫힌 경우, 또는 닫는 괄호가 '〉' 등으로
+        잘못 인식된 경우에도 다음 조문이 보존된다.
+      - max_lookahead 안에 닫는 괄호가 없으면 결합하지 않는다.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        ln = lines[i]
+        if _ARTICLE_OPEN_RE.match(ln.strip()) and ")" not in ln and "）" not in ln:
+            j = i + 1
+            merged = ln.rstrip()
+            found = False
+            while j < n and (j - i) <= max_lookahead:
+                nxt = lines[j].strip()
+                # 다음 줄이 새 구조 헤더면 결합 중단(다음 조문 삼킴 방지)
+                if _STRUCT_HEADER_RE.match(nxt):
+                    break
+                merged = merged + " " + nxt
+                if ")" in lines[j] or "）" in lines[j]:
+                    found = True
+                    j += 1
+                    break
+                j += 1
+            if found:
+                out.append(merged)
+                i = j
+                continue
+        out.append(ln)
+        i += 1
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -158,6 +221,8 @@ def parse_structure(text: str) -> list[ArticleNode]:
     list[ArticleNode]
         Top-level nodes of the parsed hierarchy.
     """
+    # 줄바꿈으로 끊긴 조 제목을 먼저 한 줄로 결합(조문 누락 방지).
+    text = _join_wrapped_article_titles(text)
     lines = text.split("\n")
 
     # Root container — collects top-level nodes
