@@ -68,7 +68,7 @@ DB_CONFIG = {
 # 두음법칙 variant characters that indicate North Korean orthography
 DUEUM_CHARS = re.compile(r"[렬련로룡류리녀뇨뉴니래]")
 
-OUTPUT_PATH = Path("E:/004_북한법/legalize-kp/compare/term_pairs.json")
+OUTPUT_PATH = Path("E:/004_북한법/legalize-kp-api/data/compare/term_pairs.json")
 
 
 # ---------------------------------------------------------------------------

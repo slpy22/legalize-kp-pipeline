@@ -11,7 +11,7 @@ import asyncpg
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api"))
 from app.core.config import load_config
 
-TERMS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp", "compare", "term_pairs.json")
+TERMS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api", "data", "compare", "term_pairs.json")
 
 
 async def main():

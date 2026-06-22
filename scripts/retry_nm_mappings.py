@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.core.config import load_config
 from scripts.generate_mappings_nm import fetch_kp_laws_with_articles, generate_nm_mapping
 
-MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp", "compare", "law_mappings.json")
+MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api", "data", "compare", "law_mappings.json")
 MAX_RETRIES = 3
 RETRY_DELAY = 45
 

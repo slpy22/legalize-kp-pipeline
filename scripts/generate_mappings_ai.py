@@ -14,7 +14,7 @@ import asyncpg
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api"))
 from app.core.config import load_config
 
-OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp", "compare", "law_mappings.json")
+OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api", "data", "compare", "law_mappings.json")
 
 
 async def fetch_kp_laws(cfg):

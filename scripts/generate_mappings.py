@@ -4,7 +4,7 @@ generate_mappings.py
 Load all NK law names + categories from PostgreSQL (legalize_kp DB),
 search the beopmang API for a matching SK law, score similarity with
 difflib.SequenceMatcher, and write the results to
-  E:/004_북한법/legalize-kp/compare/law_mappings.json
+  E:/004_북한법/legalize-kp-api/data/compare/law_mappings.json
 
 Usage:
     python scripts/generate_mappings.py
@@ -37,7 +37,7 @@ CONFIG_PATH = str(API_ROOT / "config.yaml")
 # ---------------------------------------------------------------------------
 # Output path
 # ---------------------------------------------------------------------------
-OUTPUT_PATH = Path("E:/004_북한법/legalize-kp/compare/law_mappings.json")
+OUTPUT_PATH = Path("E:/004_북한법/legalize-kp-api/data/compare/law_mappings.json")
 
 # ---------------------------------------------------------------------------
 # 문화어 → 남한어 기본 치환 테이블

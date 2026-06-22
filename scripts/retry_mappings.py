@@ -10,7 +10,7 @@ import asyncpg
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api"))
 from app.core.config import load_config
 
-MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp", "compare", "law_mappings.json")
+MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api", "data", "compare", "law_mappings.json")
 MAX_RETRIES = 3
 RETRY_DELAY = 30  # 503 대기
 

@@ -207,6 +207,10 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False, emit_
     unification_dir: str | None = cfg.get("unification_text_dir")
     output_repo: str = cfg["output_repo"]
     output_kp_dir: str = cfg["output_kp_dir"]
+    # 검증/통계 리포트 출력 위치. output_repo(법령 git 리포)에 파생물이 쌓이지
+    # 않도록 별도 디렉토리로 분리(미설정 시 output_repo 로 폴백).
+    reports_dir: str = cfg.get("reports_dir", output_repo)
+    os.makedirs(reports_dir, exist_ok=True)
     constitutional_names: list[str] = cfg.get("constitutional_names", [])
 
     # ── Phase 1: Merge sources ─────────────────────────────────────────────
@@ -297,7 +301,7 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False, emit_
     )
     print(summary_line)
 
-    report_path = os.path.join(output_repo, "validation_report.json")
+    report_path = os.path.join(reports_dir, "validation_report.json")
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(validation, f, ensure_ascii=False, indent=2)
@@ -315,7 +319,7 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False, emit_
         "categories": category_counts,
     }
 
-    stats_path = os.path.join(output_repo, "stats.json")
+    stats_path = os.path.join(reports_dir, "stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
     print(f"  → {stats_path} 저장 완료")

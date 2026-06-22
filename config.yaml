@@ -5,6 +5,8 @@ mobu_text_dir: "E:/004_북한법/법무부/변환텍스트"
 unification_text_dir: "E:/004_북한법/개별법령/변환텍스트"
 output_repo: "E:/004_북한법/legalize-kp"
 output_kp_dir: "E:/004_북한법/legalize-kp/kp"
+# 검증/통계 리포트는 법령 git 리포(output_repo) 밖, 파이프라인 로컬에 둔다.
+reports_dir: "E:/004_북한법/legalize-kp-pipeline/_reports"
 git_author_name: "legalize-kp-bot"
 git_author_email: "bot@legalize-kp.org"
 git_timezone: "+09:00"

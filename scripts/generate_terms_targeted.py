@@ -5,7 +5,7 @@ import sys
 import re
 import time
 
-TERMS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp", "compare", "term_pairs.json")
+TERMS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api", "data", "compare", "term_pairs.json")
 
 # 기존 로드
 with open(TERMS_PATH, "r", encoding="utf-8") as f:

@@ -16,7 +16,7 @@ import asyncpg
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api"))
 from app.core.config import load_config
 
-OUTPUT = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp", "compare", "culture_word_candidates.json")
+OUTPUT = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api", "data", "compare", "culture_word_candidates.json")
 
 
 async def main():
@@ -77,7 +77,7 @@ async def main():
     }
 
     # 기존 매핑에 있는 단어 제외
-    existing_path = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp", "compare", "term_pairs.json")
+    existing_path = os.path.join(os.path.dirname(__file__), "..", "..", "legalize-kp-api", "data", "compare", "term_pairs.json")
     existing_kp = set()
     if os.path.exists(existing_path):
         with open(existing_path, "r", encoding="utf-8") as f:
