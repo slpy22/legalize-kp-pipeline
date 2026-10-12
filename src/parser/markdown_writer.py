@@ -43,6 +43,8 @@ def generate_frontmatter(
     *,
     text_unavailable: bool = False,
     is_authentic: Optional[bool] = None,
+    is_ocr: Optional[bool] = None,
+    excerpt_articles: Optional[list] = None,
 ) -> str:
     """
     Return a YAML string (without --- delimiters) representing the law's frontmatter.
@@ -110,7 +112,8 @@ def generate_frontmatter(
     data["날짜추정"] = date_estimated
 
     # OCR fields
-    data["OCR여부"] = entry.is_ocr
+    # 판본별 값(is_ocr)이 주어지면 그것을, 아니면 법령 단위 값을 쓴다
+    data["OCR여부"] = entry.is_ocr if is_ocr is None else is_ocr
     if entry.ocr_confidence is not None:
         data["OCR신뢰도"] = entry.ocr_confidence
 
@@ -118,8 +121,17 @@ def generate_frontmatter(
     if is_authentic is not None:
         data["정본여부"] = is_authentic
 
+    # 개정 조문만 실린 발췌 판본(annotations.yaml '발췌본') — 수록 조문 번호를 함께 적는다
+    if excerpt_articles is not None:
+        data["발췌본"] = True
+        data["발췌조문"] = list(excerpt_articles)
+
     # Revision history
     data["개정이력"] = amendments
+
+    # 원문값은 그대로 두고 외부 자료의 다른 날짜를 함께 적는다(annotations.yaml)
+    if entry.date_disputes:
+        data["날짜이견"] = [dict(d) for d in entry.date_disputes]
 
     # Optional flag: text unavailable
     if text_unavailable:

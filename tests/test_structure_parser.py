@@ -277,3 +277,60 @@ def test_parse_sections():
     art2 = [c for c in sections[1].children if c.level == "조"]
     assert len(art1) == 1
     assert len(art2) == 1
+
+
+def test_article_number_and_title_on_separate_lines():
+    """'제N조' 단독 줄 + 다음 줄 '(제목)' 형식도 조문으로 잡는다 (행정처벌법 2015 변환본)."""
+    text = """제1장 기본
+제1조
+(행정처벌법의 사명)
+이 법은 사명을 정한다.
+제2조
+(위법행위의
+미연방지원칙)
+국가는 위법행위를 미연에 방지한다."""
+
+    articles = _find_by_level(parse_structure(text), "조")
+    assert [a.number for a in articles] == ["1", "2"]
+    assert articles[0].title == "행정처벌법의 사명"
+    assert articles[1].title == "위법행위의 미연방지원칙"
+    assert "사명을 정한다" in articles[0].content
+
+
+def test_bare_article_without_title_line_is_not_merged():
+    """'제N조' 단독 줄 다음이 제목 괄호가 아니면 합치지 않는다(본문 줄바꿈 오인 방지)."""
+    text = """제1장 기본
+제1조 (목적)
+이 법의
+제2조
+에 따라 처리한다."""
+
+    articles = _find_by_level(parse_structure(text), "조")
+    assert [a.number for a in articles] == ["1"]
+
+
+def test_line_start_cross_reference_with_paragraph_is_not_article():
+    """줄 첫머리의 '제N조 1, 2항의…' 는 교차참조다(형사소송법 2016 제151조 본문)."""
+    text = """제1장 기본
+제151조 (예심기간의 연장)
+예심은 이 법
+제187조 1, 2항의 규정에 따라 5개월까지 할수 있다.
+제152조 (예심사건의 이송)
+본문."""
+
+    articles = _find_by_level(parse_structure(text), "조")
+    assert [a.number for a in articles] == ["151", "152"]
+    assert "제187조 1, 2항" in articles[0].content
+
+
+def test_nested_paren_title_wrapped_over_lines():
+    """제목 안 괄호 + 줄바꿈: '제16조 (도(직할시)⏎공증기관의 관할)' (공증법 2020)."""
+    text = """제1장 기본
+제16조 (도(직할시)
+공증기관의 관할)
+도(직할시)공증기관은 해당 대상을 공증한다."""
+
+    articles = _find_by_level(parse_structure(text), "조")
+    assert [a.number for a in articles] == ["16"]
+    assert articles[0].title == "도(직할시) 공증기관의 관할"
+    assert articles[0].content.startswith("도(직할시)공증기관은")

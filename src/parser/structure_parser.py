@@ -46,7 +46,8 @@ _SUBSEC_RE  = re.compile(r'^제(\d+)관\s+(.+)')       # 관
 # Article: 제N조 (title)  — title may use ASCII or fullwidth parens
 # 조 번호와 제목 사이의 OCR 잡음(언더스코어 '_')도 허용 — main.py 의 장-이전 조문
 # 우회 regex(제\d+조[\s_]*)와 동일하게 맞춤.
-_ARTICLE_RE = re.compile(r'^제(\d+)조[\s_]*[\(（](.+?)[\)）]')
+# 제목 안의 괄호 한 겹은 허용한다(예: 공증법 "(도(직할시)공증기관의 관할)").
+_ARTICLE_RE = re.compile(r'^제(\d+)조[\s_]*[\(（]((?:[^()（）]|[\(（][^()（）]*[\)）])+?)[\)）]')
 
 # Article without parenthesized title: 제N조 content... or 제N조content...
 #
@@ -56,8 +57,10 @@ _ARTICLE_RE = re.compile(r'^제(\d+)조[\s_]*[\(（](.+?)[\)）]')
 #   - 공백/언더스코어가 있으면(제N조 내용) 정상 조문으로 본다.
 #   - 공백 없이 한글이 바로 오면(제2조대외경제중재법…) 조문이되, 조사 시작은 제외.
 _JOSA = r'의|에|를|을|은|는|이|가|와|과|로|및|도|만|나|란|며|부터|까지|에서|에게|보다|마다'
+#   - 공백 뒤에 'N항'·'N, N항'·'N호' 가 오면 줄 첫머리에 걸린 교차참조다
+#     (예: 형사소송법 2016 "…이 법⏎제187조 1, 2항의 규정에 따라").
 _ARTICLE_NOTITLE_RE = re.compile(
-    r'^제(\d+)조(?:[\s_]+|(?=[가-힣])(?!(?:' + _JOSA + r')))(.*)'
+    r'^제(\d+)조(?:[\s_]+(?!\d+(?:\s*,\s*\d+)*\s*[항호])|(?=[가-힣])(?!(?:' + _JOSA + r')))(.*)'
 )
 
 # 부칙 — 단, '부칙은/부칙을/부칙에...' 처럼 조사가 붙은 본문 문장은 부칙 섹션
@@ -155,16 +158,23 @@ def _match_mok(raw_line: str) -> Optional[tuple[str, str]]:
 
 # 조 제목 줄바꿈 결합용: 여는 괄호 있고 닫는 괄호 없는 '제N조(' 헤더 줄 판별
 _ARTICLE_OPEN_RE = re.compile(r'^제(\d+)조[\s_]*[\(（]')
+# 제목이 다음 줄로 넘어간 '제N조' 단독 줄
+_ARTICLE_BARE_RE = re.compile(r'^제\d+조$')
 # 결합을 중단해야 하는 새 구조 헤더(다음 조문/장 등 삼킴 방지)
 _STRUCT_HEADER_RE = re.compile(r'^(?:제\d+[조장절관편]|부\s*칙)')
+
+
+def _paren_depth(line: str) -> int:
+    """여는 괄호 수 - 닫는 괄호 수(전각 포함). 0 보다 크면 제목 괄호가 아직 안 닫혔다."""
+    return line.count("(") + line.count("（") - line.count(")") - line.count("）")
 
 
 def _join_wrapped_article_titles(text: str, max_lookahead: int = 3) -> str:
     """제목이 여러 줄로 끊긴 조 헤더를 한 줄로 결합한다.
 
     예) '제5조(문화유물을 ... 보호관리할데 대한\n원칙)' → '제5조(... 대한 원칙)'
-    여는 괄호만 있고 닫는 괄호가 없는 '제N조(' 헤더 줄을, 닫는 괄호가 나오는
-    줄까지(최대 max_lookahead 줄) 공백으로 이어 붙인다.
+    괄호가 덜 닫힌 '제N조(' 헤더 줄을, 괄호가 모두 닫히는 줄까지(최대 max_lookahead 줄)
+    공백으로 이어 붙인다. 제목 안에 괄호가 한 겹 더 있는 경우('(도(직할시)⏎공증기관의 관할)')도 잇는다.
 
     안전장치:
       - 닫는 괄호를 찾기 전에 새 구조 헤더(제N조/장/절/관/편/부칙)를 만나면
@@ -179,7 +189,13 @@ def _join_wrapped_article_titles(text: str, max_lookahead: int = 3) -> str:
     n = len(lines)
     while i < n:
         ln = lines[i]
-        if _ARTICLE_OPEN_RE.match(ln.strip()) and ")" not in ln and "）" not in ln:
+        # '제N조' 단독 줄 + 다음 줄 '(제목)' → '제N조 (제목' 으로 합친 뒤 아래 결합 규칙으로 처리
+        # (예: 행정처벌법 2015 PDF 변환본 제1~99조가 이 형식이라 조문으로 안 잡혔다)
+        if _ARTICLE_BARE_RE.match(ln.strip()) and i + 1 < n and lines[i + 1].strip()[:1] in ("(", "（"):
+            ln = ln.strip() + " " + lines[i + 1].strip()
+            lines[i + 1] = ln
+            i += 1
+        if _ARTICLE_OPEN_RE.match(ln.strip()) and _paren_depth(ln) > 0:
             j = i + 1
             merged = ln.rstrip()
             found = False
@@ -189,7 +205,7 @@ def _join_wrapped_article_titles(text: str, max_lookahead: int = 3) -> str:
                 if _STRUCT_HEADER_RE.match(nxt):
                     break
                 merged = merged + " " + nxt
-                if ")" in lines[j] or "）" in lines[j]:
+                if _paren_depth(merged) <= 0:
                     found = True
                     j += 1
                     break

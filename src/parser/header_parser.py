@@ -62,7 +62,7 @@ class HeaderInfo:
 _AMENDMENT_RE = re.compile(
     r'(?:주체\s*\d+\s*\(\s*(\d{4})\s*\)|(\d{4}))\s*년\s*\n?\s*'      # 주체NN(YYYY)년  또는  YYYY년
     r'(\d{1,2})\s*월\s*(\d{1,2})(?:\s*[~∼−–-]\s*\d{1,2})?\s*일\s+'  # MM 월 DD 일 또는 DD~DD일 (공백 허용)
-    r'(.+?(?:채택|수정보충|수정|승인|제정))',                       # basis + action (수정/승인/제정 추가)
+    r'(.*?(?:채택|수정보충|수정|승인|제정))',                       # basis + action (날짜 바로 뒤 '채택'도 허용)
     re.DOTALL
 )
 
@@ -71,6 +71,9 @@ _BODY_START_RE = re.compile(
     r'^(제\d+[장조편절관]|서\s*문)',
     re.MULTILINE
 )
+
+# 조·장 표지가 없는 문서에서 채택·개정 문구를 찾는 첫머리 범위(글자 수)
+_HEAD_SCAN = 300
 
 # "결정 제N호" or "정령 제N호" style basis extraction
 _BASIS_RE = re.compile(r'(?:결정|정령|법령|명령)\s*제\d+호')
@@ -85,6 +88,9 @@ def _extract_basis(raw: str) -> str:
     m = _BASIS_RE.search(raw)
     if m:
         return m.group(0)
+    # "9월 8일 채택" 처럼 근거 없이 행위만 있으면 근거는 비운다
+    if raw.strip() in ("채택", "수정보충", "수정", "승인", "제정"):
+        return ""
     return raw.strip()
 
 
@@ -134,6 +140,12 @@ def parse_header(text: str) -> HeaderInfo:
     # --- Find body start index (먼저 계산: 개정일 검색을 헤더 영역으로 한정) ---
     body_match = _BODY_START_RE.search(text)
     body_start_index = body_match.start() if body_match else 0
+    if not body_match:
+        # 조·장 표지가 없는 결정·원칙 문서(핵무력정책에 대하여 등): 첫머리의 채택·개정 문구
+        # 끝을 본문 시작으로 본다. 이것이 없으면 본문 전체가 시행근거로 들어간다.
+        head = [m for m in _AMENDMENT_RE.finditer(text[:_HEAD_SCAN]) if m.start() < _HEAD_SCAN]
+        if head:
+            body_start_index = head[-1].end()
     # 헤더 영역(본문 시작 전)만 스캔 — 평년형식 허용에 따른 본문 오탐 방지.
     header_region = text[:body_start_index] if body_start_index else text
 

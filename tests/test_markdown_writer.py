@@ -230,3 +230,10 @@ def test_write_law_file(tmp_path):
     data = yaml.safe_load(fm_block)
     assert data["제목"] == "저작권법"
     assert len(data["개정이력"]) == 3
+
+
+def test_frontmatter_version_ocr_overrides_entry():
+    """판본별 is_ocr 가 주어지면 법령 단위 is_ocr 대신 쓴다(개별법령 OCR 판본)."""
+    entry = LawEntry(name="형사소송법", category="형·민사")
+    assert yaml.safe_load(generate_frontmatter(entry, [], "nktechlab", is_ocr=True))["OCR여부"] is True
+    assert yaml.safe_load(generate_frontmatter(entry, [], "nis"))["OCR여부"] is False

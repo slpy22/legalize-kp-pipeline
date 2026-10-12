@@ -90,6 +90,21 @@ def _extract_date_from_filename(filename: str) -> Optional[str]:
     return f"{year}-{month:02d}-{day:02d}"
 
 
+def _file_version_date(path: str) -> Optional[str]:
+    """파일명 일자. 파일명에 일(日)이 없으면(예: '문화유물보호법(2011)') 머리 개정이력의
+    최신 일자가 같은 연도(월이 있으면 같은 월)일 때 그 일자를 쓴다 — 01-01 자리표 방지.
+    맞는 머리 일자가 없으면 파일명 일자(자리표)를 그대로 돌려준다.
+    """
+    name = Path(path).name
+    date = _extract_date_from_filename(name)
+    m = _DATE_IN_FILENAME_RE.search(name)
+    if not date or not m or m.group(3):
+        return date
+    prefix = f"{int(m.group(1)):04d}" + (f"-{int(m.group(2)):02d}" if m.group(2) else "")
+    header_date = _date_from_header(_read_text(path))
+    return header_date if header_date.startswith(prefix) else date
+
+
 def _read_text(path: str) -> str:
     """Read a UTF-8 text file, falling back to cp949 on decode errors."""
     try:
@@ -212,6 +227,28 @@ def _lookup(files_dict: dict, entry: LawEntry):
     return None
 
 
+def load_unification_meta(unification_dir: str | None) -> dict:
+    """개별법령/_meta.json 의 entries 를 변환텍스트 절대경로 → 항목 으로.
+
+    개별법령에는 여러 입수 경로(통일부 발표 자료, NK TechLab 등)가 섞이므로 판본별
+    source_id(기본 "unification")·ocr 여부·action(채택/수정보충)을 여기서 읽는다.
+    """
+    if not unification_dir:
+        return {}
+    meta_path = Path(unification_dir).parent / "_meta.json"
+    if not meta_path.exists():
+        return {}
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    default_id = meta.get("source_id", "unification")
+    out = {}
+    for item in meta.get("entries", []):
+        if item.get("text_file"):
+            path = os.path.normcase(str((meta_path.parent / item["text_file"]).resolve()))
+            out[path] = {"source_id": item.get("source_id", default_id), "ocr": bool(item.get("ocr")),
+                         "action": item.get("action", "수정보충")}
+    return out
+
+
 def merge_sources(
     master_path: str,
     nis_dir: str,
@@ -233,6 +270,7 @@ def merge_sources(
     nis_files = find_text_files(nis_dir)
     mobu_files = find_text_files(mobu_dir)
     uni_files = find_text_files(unification_dir) if unification_dir else {}
+    uni_meta = load_unification_meta(unification_dir)
 
     for entry in entries:
         versions: list[LawVersion] = []
@@ -251,18 +289,20 @@ def merge_sources(
             _extract_date_from_filename(Path(uni_path).name) if uni_path else None
         )
         mobu_date = (
-            _extract_date_from_filename(Path(mobu_path).name) if mobu_path else None
+            _file_version_date(mobu_path) if mobu_path else None
         )
         nis_date = entry.latest_version_date or ""
 
         if uni_path:
             text = _read_text(uni_path)
+            meta = uni_meta.get(os.path.normcase(str(Path(uni_path).resolve())), {})
             versions.append(LawVersion(
                 date=uni_date or entry.latest_version_date or "",
-                action="수정보충",
-                source="unification",
+                action=meta.get("action", "수정보충"),
+                source=meta.get("source_id", "unification"),
                 text=text,
                 text_available=True,
+                is_ocr=meta.get("ocr", False),
             ))
         else:
             use_mobu = bool(mobu_path) and (
@@ -296,12 +336,12 @@ def merge_sources(
                     text_available=True,
                 ))
 
-        # 통일부 본이 현행이면 MOBU current는 별도 이전버전 entry로 보존
-        # (역사 기록용). 파일명에서 추출한 정확한 일자(mobu_date)가 unification과
-        # 다를 때만 추가 — 같은 일자면 중복이 되므로 생략. NIS current는 일자
-        # 정보가 master.latest_version_date 외에 없어 일자 충돌 위험이 있으므로
-        # 별도 추가하지 않는다.
-        if uni_path and mobu_path and mobu_date and mobu_date != uni_date:
+        # 개별법령 본이 현행이면 그보다 앞선 MOBU·NIS current 는 이전 판본으로 보존한다
+        # (예: 형사소송법 2021-01-20 국정원 본). 개별법령 본과 같은 일자면 중복이라 넣지 않고,
+        # MOBU·NIS 가 같은 일자면 개별법령이 없을 때처럼 NIS 를 쓴다.
+        nis_kept = bool(uni_path and nis_path and nis_date and nis_date != uni_date)
+        if (uni_path and mobu_path and mobu_date and mobu_date != uni_date
+                and not (nis_kept and mobu_date == nis_date)):
             versions.append(LawVersion(
                 date=mobu_date,
                 action="수정보충",
@@ -309,12 +349,19 @@ def merge_sources(
                 text=_read_text(mobu_path),
                 text_available=True,
             ))
+        if nis_kept:
+            versions.append(LawVersion(
+                date=nis_date,
+                action="수정보충",
+                source="nis",
+                text=_read_text(nis_path),
+                text_available=True,
+            ))
 
         # ── Previous versions (MOBU 이전버전) ─────────────────────────────
         if mobu_info:
             for prev_path in mobu_info["previous"]:
-                filename = Path(prev_path).name
-                date = _extract_date_from_filename(filename) or ""
+                date = _file_version_date(prev_path) or ""
                 text = _read_text(prev_path)
                 versions.append(LawVersion(
                     date=date,

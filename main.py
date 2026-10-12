@@ -56,6 +56,32 @@ def _build_placeholder_content(entry: LawEntry, version: LawVersion) -> str:
     return f"---\n{frontmatter}---\n\n텍스트 미확보\n"
 
 
+def _merge_history_additions(amendments: list[dict], additions: list[dict]) -> list[dict]:
+    """개정이력에 원문 미확보 항목을 일자 순으로 끼운다. 같은 일자가 있으면 그 항목에 키를 더한다."""
+    merged = [dict(a) for a in amendments]
+    for add in additions:
+        extra = {k: add[k] for k in ("원문미확보", "외부근거", "비고") if k in add}
+        same = next((a for a in merged if a["일자"] == add["일자"]), None)
+        if same is not None:
+            same.update(extra)
+        else:
+            merged.append({"일자": add["일자"], "내용": add["내용"], **extra})
+    merged.sort(key=lambda a: a["일자"])
+    return merged
+
+
+def _number_items_as_headings(body: str) -> str:
+    """'1.' '2.' … 로 차례로 이어지는 줄만 '##### N. …' 머리로 바꾼다(번호가 건너뛰면 본문으로 둔다)."""
+    expected = 1
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        m = re.match(r'^(\d+)\.\s*(\S.*)$', line.strip())
+        if m and int(m.group(1)) == expected:
+            lines[i] = f"##### {expected}. {m.group(2)}"
+            expected += 1
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Per-version processing
 # ---------------------------------------------------------------------------
@@ -87,7 +113,10 @@ def _process_version(
         )
 
     # Full processing pipeline
-    normalized = normalize_text(version.text)
+    # 국정원 법령집 권말 '법령색인'이 각 권 마지막 법령(허풍방지법·황금평, 위화도경제지대법)
+    # 변환텍스트 끝에 붙어 있다 — 색인 이후는 본문이 아니므로 잘라낸다.
+    raw_text = re.split(r"(?m)^[ \t]*법령색인[ \t]*$", version.text, maxsplit=1)[0]
+    normalized = normalize_text(raw_text)
     header = parse_header(normalized)
 
     # Extract body text starting from header.body_start_index
@@ -136,6 +165,11 @@ def _process_version(
         {"일자": amend.date, "내용": amend.action}
         for amend in header.amendments
     ]
+    # 원문 없는 개정 이력(annotations.yaml '이력추가')은 법령의 최신 판본에만 붙인다
+    # (이전 판본 blob 은 그대로). 같은 일자 항목이 이미 있으면 표시만 덧붙인다.
+    dated = [v.date for v in entry.versions if v.date]
+    if entry.history_additions and dated and version.date == max(dated):
+        amendments_dicts = _merge_history_additions(amendments_dicts, entry.history_additions)
 
     # enactment_basis: last amendment's .basis field
     enactment_basis = header.amendments[-1].basis if header.amendments else ""
@@ -159,6 +193,10 @@ def _process_version(
     # If structure parser found no nodes, use the raw body text as-is
     if not body_md.strip() and body_text.strip():
         body_md = body_text.strip()
+    # 조문이 하나도 없는 결정·원칙 문서(핵무력정책에 대하여, 10대 원칙 등)는 원문의
+    # 번호 항목 "1. 핵무력의 사명" 을 항목 머리 "##### 1. 핵무력의 사명" 으로 올린다.
+    if not re.search(r'(?m)^#{5}\s*제\d+조', body_md):
+        body_md = _number_items_as_headings(body_md)
     # 서문/첫 장 누락분이 있으면 본문 앞에 합친다 (순서: 서문 → 첫 장 조문 → 본문)
     if preamble_md or head_md:
         body_md = preamble_md + head_md + body_md
@@ -177,6 +215,9 @@ def _process_version(
         amendments=amendments_dicts,
         source=version.source,
         is_authentic=(version.source == "nis"),
+        is_ocr=entry.is_ocr or version.is_ocr,
+        excerpt_articles=(re.findall(r'(?m)^#{5}\s*(제\d+조)', body_md)
+                          if version.date in entry.excerpt_dates else None),
     )
 
     content = f"---\n{frontmatter_str}---\n\n{body_md}\n"
@@ -188,6 +229,120 @@ def _process_version(
         file_path=file_path,
         content=content,
     )
+
+
+# ---------------------------------------------------------------------------
+# 판본별 본문 정정 (corrections.yaml)
+# ---------------------------------------------------------------------------
+
+def _load_corrections(cfg: dict, config_path: str) -> list[dict]:
+    """corrections.yaml 을 읽는다. 상대경로는 이 파일(main.py) 위치 기준."""
+    path = cfg.get("corrections", "corrections.yaml")
+    if not os.path.isabs(path):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        items = yaml.safe_load(f) or []
+    print(f"[corrections] {path} — {len(items)}건")
+    return items
+
+
+def _apply_corrections(commit: CommitEntry, corrections: list[dict], errors: list[str]) -> None:
+    """해당 판본의 정정을 적용한다. old 출현 횟수가 count 와 다르면 errors 에 남긴다."""
+    for c in corrections:
+        if c["law"] != commit.law_name or str(c["date"]) != commit.date:
+            continue
+        want = int(c.get("count", 1))
+        got = commit.content.count(c["old"])
+        if got != want:
+            c["_failed"] = True
+            errors.append(f"{commit.law_name} ({commit.date}): {c['old']!r} {got}회 (기대 {want}회)")
+            continue
+        commit.content = commit.content.replace(c["old"], c["new"])
+        c["_applied"] = True
+
+
+# ---------------------------------------------------------------------------
+# 법령 주석 (annotations.yaml) — 원천 텍스트는 그대로 두고 frontmatter 에 덧붙인다
+# ---------------------------------------------------------------------------
+
+_DISPUTE_KEYS = ("항목", "원문값", "이견값", "출처", "비고")
+_HISTORY_ACTIONS = ("채택", "수정보충", "수정", "폐지")
+
+
+def _load_annotations(cfg: dict) -> list[dict]:
+    """annotations.yaml 을 읽는다. 상대경로는 이 파일(main.py) 위치 기준."""
+    path = cfg.get("annotations", "annotations.yaml")
+    if not os.path.isabs(path):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        items = yaml.safe_load(f) or []
+    print(f"[annotations] {path} — {len(items)}건")
+    return items
+
+
+def _attach_annotations(entries: list[LawEntry], annotations: list[dict], errors: list[str]) -> None:
+    """날짜이견 항목을 해당 법령 entry.date_disputes 에 붙인다(키 순서 고정, 날짜는 문자열)."""
+    by_name = {e.name: e for e in entries}
+    for a in annotations:
+        entry = by_name.get(a.get("law"))
+        if entry is None:
+            errors.append(f"{a.get('law')}: 마스터목록에 없는 법령")
+            continue
+        for d in a.get("날짜이견") or []:
+            missing = [k for k in ("항목", "원문값", "이견값", "출처") if not d.get(k)]
+            if missing:
+                errors.append(f"{entry.name}: 날짜이견 필수 키 없음 {missing}")
+                continue
+            entry.date_disputes.append({k: str(d[k]) for k in _DISPUTE_KEYS if d.get(k)})
+        for h in a.get("이력추가") or []:
+            date, action = str(h.get("일자", "")), h.get("내용")
+            if not re.fullmatch(r"\d{4}-\d{2}(-\d{2})?", date) or action not in _HISTORY_ACTIONS                     or not h.get("외부근거"):
+                errors.append(f"{entry.name}: 이력추가 형식 오류 {h}")
+                continue
+            add = {"일자": date, "내용": action, "원문미확보": True, "외부근거": str(h["외부근거"])}
+            if h.get("비고"):
+                add["비고"] = str(h["비고"])
+            entry.history_additions.append(add)
+        version_dates = {v.date for v in entry.versions}
+        for d in a.get("발췌본") or []:
+            if str(d) not in version_dates:
+                errors.append(f"{entry.name}: 발췌본 판본 {d} 없음")
+                continue
+            entry.excerpt_dates.append(str(d))
+
+
+def _check_history_additions(commit: CommitEntry, entry: LawEntry, errors: list[str]) -> None:
+    """최신 판본이면 이력추가 항목이 개정이력에 원문미확보로 한 번씩 들어갔는지 본다."""
+    dated = [v.date for v in entry.versions if v.date]
+    if not entry.history_additions or not dated or commit.date != max(dated):
+        return
+    fm = yaml.safe_load(commit.content.split("---", 2)[1]) or {}
+    items = fm.get("개정이력") or []
+    for add in entry.history_additions:
+        hits = [x for x in items if str(x.get("일자")) == add["일자"] and x.get("원문미확보") is True]
+        if len(hits) != 1:
+            errors.append(f"{entry.name} ({commit.date}): 이력추가 {add['일자']} 반영 {len(hits)}회")
+
+
+def _check_disputes(commit: CommitEntry, entry: LawEntry, errors: list[str]) -> None:
+    """원문값이 그 판본 frontmatter 의 실제 값과 같은지 본다(원천이 바뀌어 어긋난 이견을 걸러낸다)."""
+    if not entry.date_disputes:
+        return
+    fm = yaml.safe_load(commit.content.split("---", 2)[1]) or {}
+    for d in entry.date_disputes:
+        item = d["항목"]
+        if item.startswith("개정이력"):
+            actual = [str(x.get("일자")) for x in fm.get("개정이력") or []]
+            ok = d["원문값"] in actual
+        else:
+            actual = str(fm.get(item))
+            ok = actual == d["원문값"]
+        if not ok:
+            errors.append(f"{entry.name} ({commit.date}): 날짜이견 {item} 원문값 {d['원문값']} ≠ frontmatter {actual}")
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +374,11 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False, emit_
     print(f"  → 법령 {len(entries)}건 로드")
 
     # ── Phase 2-3: Process each entry / version ────────────────────────────
+    corrections = _load_corrections(cfg, config_path)
+    correction_errors: list[str] = []
+    annotations = _load_annotations(cfg)
+    _attach_annotations(entries, annotations, correction_errors)
+
     print("\n[Phase 2-3] 법령 파싱 중...")
     commits: list[CommitEntry] = []
     failures: list[str] = []
@@ -242,6 +402,9 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False, emit_
         for version in entry.versions:
             try:
                 commit = _process_version(entry, version, constitutional_names)
+                _apply_corrections(commit, corrections, correction_errors)
+                _check_disputes(commit, entry, correction_errors)
+                _check_history_additions(commit, entry, correction_errors)
                 commits.append(commit)
             except Exception as exc:
                 msg = f"  [FAIL] {entry.name} ({version.date}): {exc}"
@@ -253,6 +416,19 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False, emit_
             print(f"  진행: {processed}/{len(entries)} 법령 처리 완료")
 
     print(f"  → 총 {len(commits)}건 커밋 엔트리 생성, 실패 {len(failures)}건")
+    applied = sum(1 for c in corrections if c.get("_applied"))
+    print(f"  → 본문 정정 {applied}/{len(corrections)}건 적용")
+    print(f"  → 날짜이견 {sum(len(e.date_disputes) for e in entries)}건 기록")
+    print(f"  → 이력추가 {sum(len(e.history_additions) for e in entries)}건 기록")
+    print(f"  → 발췌본 {sum(len(e.excerpt_dates) for e in entries)}판본 표시")
+    unused = [c for c in corrections if not c.get("_applied") and not c.get("_failed")]
+    for c in unused:
+        correction_errors.append(f"{c['law']} ({c['date']}): 대상 판본 없음 — {c['old']!r}")
+    if correction_errors:
+        # 정정이 어긋난 채로 저장소·DB 를 만들지 않는다
+        for e in correction_errors:
+            print(f"  [CORRECTION FAIL] {e}")
+        sys.exit("본문 정정·주석 목록(corrections.yaml·annotations.yaml)이 원천과 맞지 않아 중단합니다.")
 
     # ── (선택) 모든 버전 dump — DB law_versions 적재용 ───────────────────────
     if emit_versions:

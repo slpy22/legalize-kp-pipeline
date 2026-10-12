@@ -499,3 +499,88 @@ class TestMergeSourcesDateExtraction:
         result = merge_sources(master_path, nis_dir, mobu_dir)
         entry = result[0]
         assert any(v.date == "2005-03-09" for v in entry.versions)
+
+
+# ---------------------------------------------------------------------------
+# 개별법령(unification_dir) — _meta.json 의 판본별 source_id·ocr, NIS current 보존
+# ---------------------------------------------------------------------------
+
+class TestUnificationMeta:
+    def _setup(self, tmp_path, with_meta=True):
+        law = {
+            "name": "형사소송법", "category": "형·민사",
+            "latest_version_date": "2021-01-20", "enactment_date": "1992-01-15",
+            "amendment_count": 0, "total_articles": 1, "chapter_count": 0, "chapters": [],
+            "has_appendix": False, "in_mobu": False, "in_nis2024": True,
+            "mobu_files": [], "nis_volume": "상권", "nis_page": 1,
+        }
+        master_path = _make_master_json(tmp_path, [law])
+        nis_dir = tmp_path / "국정원2024" / "변환텍스트"
+        (nis_dir / "형·민사").mkdir(parents=True)
+        (nis_dir / "형·민사" / "형사소송법.txt").write_text("NIS 2021", encoding="utf-8")
+        mobu_dir = tmp_path / "법무부" / "변환텍스트"
+        mobu_dir.mkdir(parents=True)
+        uni_root = tmp_path / "개별법령"
+        uni_dir = uni_root / "변환텍스트"
+        rel = "변환텍스트/형·민사/형사소송법/형사소송법(2023.5.30.).txt"
+        (uni_root / rel).parent.mkdir(parents=True)
+        (uni_root / rel).write_text("OCR 2023", encoding="utf-8")
+        if with_meta:
+            meta = {"source_id": "unification",
+                    "entries": [{"text_file": rel, "source_id": "nktechlab", "ocr": True}]}
+            (uni_root / "_meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        return master_path, str(nis_dir), str(mobu_dir), str(uni_dir)
+
+    def test_meta_source_and_ocr_applied(self, tmp_path):
+        entry = merge_sources(*self._setup(tmp_path))[0]
+        v = next(v for v in entry.versions if v.date == "2023-05-30")
+        assert v.source == "nktechlab" and v.is_ocr and v.text == "OCR 2023"
+
+    def test_older_nis_current_kept(self, tmp_path):
+        entry = merge_sources(*self._setup(tmp_path))[0]
+        assert [(v.date, v.source) for v in entry.versions] == [
+            ("2021-01-20", "nis"), ("2023-05-30", "nktechlab")]
+        assert entry.latest_version_date == "2023-05-30"
+
+    def test_without_meta_defaults_to_unification(self, tmp_path):
+        entry = merge_sources(*self._setup(tmp_path, with_meta=False))[0]
+        v = next(v for v in entry.versions if v.date == "2023-05-30")
+        assert v.source == "unification" and not v.is_ocr
+
+    def test_nis_preferred_over_mobu_same_date(self, tmp_path):
+        master_path, nis_dir, mobu_dir, uni_dir = self._setup(tmp_path)
+        law_dir = tmp_path / "법무부" / "변환텍스트" / "형민사" / "형사소송법"
+        law_dir.mkdir(parents=True)
+        (law_dir / "형사소송법(2021.1.20.).txt").write_text("MOBU 2021", encoding="utf-8")
+        entry = merge_sources(master_path, nis_dir, mobu_dir, uni_dir)[0]
+        assert [(v.date, v.source) for v in entry.versions] == [
+            ("2021-01-20", "nis"), ("2023-05-30", "nktechlab")]
+
+
+class TestYearOnlyFilenameDate:
+    """파일명이 연도만이면(문화유물보호법(2011)) 같은 연도의 머리 개정일로 보충한다."""
+
+    def _setup(self, tmp_path, header_year):
+        law = {
+            "name": "테스트법", "category": "기타", "latest_version_date": None,
+            "enactment_date": None, "amendment_count": 0, "total_articles": 0,
+            "chapter_count": 0, "chapters": [], "has_appendix": False, "in_mobu": True,
+            "in_nis2024": False, "mobu_files": [], "nis_volume": None, "nis_page": None,
+        }
+        master_path = _make_master_json(tmp_path, [law])
+        nis_dir = tmp_path / "nis"
+        nis_dir.mkdir()
+        law_dir = tmp_path / "mobu" / "기타" / "테스트법"
+        law_dir.mkdir(parents=True)
+        (law_dir / "테스트법(2011).txt").write_text(
+            f"조선민주주의인민공화국\n테스트법\n주체100({header_year})년 12월 21일 최고인민회의 상임위원회 정령 제2052호로 수정\n제1조 (사명)\n본문",
+            encoding="utf-8")
+        return master_path, str(nis_dir), str(tmp_path / "mobu")
+
+    def test_header_date_used_when_same_year(self, tmp_path):
+        entry = merge_sources(*self._setup(tmp_path, 2011))[0]
+        assert [v.date for v in entry.versions] == ["2011-12-21"]
+
+    def test_placeholder_kept_when_header_year_differs(self, tmp_path):
+        entry = merge_sources(*self._setup(tmp_path, 2009))[0]
+        assert [v.date for v in entry.versions] == ["2011-01-01"]

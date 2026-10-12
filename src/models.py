@@ -19,6 +19,7 @@ class LawVersion:
     text_available: bool = False       # Whether the text is actually available
     date_estimated: bool = False       # Whether the date is an estimate
     enactment_basis: Optional[str] = None  # Legal basis for enactment, if known
+    is_ocr: bool = False               # 판본 본문이 OCR 텍스트인지(개별법령 _meta.json 의 ocr)
 
 
 @dataclass
@@ -41,6 +42,12 @@ class LawEntry:
     mobu_key: Optional[str] = None
     mobu_files: List[str] = field(default_factory=list)
     former_names: List[str] = field(default_factory=list)
+    # 원문과 외부 자료의 날짜 이견(annotations.yaml) — frontmatter '날짜이견'
+    date_disputes: List[dict] = field(default_factory=list)
+    # 원문 없는 개정 이력(annotations.yaml '이력추가') — 최신 판본 frontmatter 개정이력에 붙는다
+    history_additions: List[dict] = field(default_factory=list)
+    # 개정 조문 발췌만 실린 판본 일자(annotations.yaml '발췌본') — frontmatter 발췌본·발췌조문
+    excerpt_dates: List[str] = field(default_factory=list)
     is_constitutional: bool = False
     is_ocr: bool = False
     ocr_confidence: Optional[float] = None
