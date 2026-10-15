@@ -284,3 +284,32 @@ class TestIntegration:
     def test_output_is_stripped(self):
         result = normalize_text("\n\n가나다\n\n")
         assert result == result.strip()
+
+
+# ---------------------------------------------------------------------------
+# Rule 4b/4c: 구조 표지 숫자 앞뒤 공백·굵게 표시 (NKLAWSVC-T10, 8차 #75·#77)
+# ---------------------------------------------------------------------------
+
+def test_spaced_article_marker_with_fullwidth_space():
+    out = normalize_text("제 1 조　조선민주주의인민공화국은 자주적인 사회주의국가이다.")
+    assert out.startswith("제1조")
+
+
+def test_spaced_markers_chapter_section_and_title_paren():
+    out = normalize_text("제5 장 공민의 기본권리와 의무\n제 6절 지방인민회의\n제 6 조(각급 지방인민위원회의 의무)")
+    assert out.split("\n") == ["제5장 공민의 기본권리와 의무", "제6절 지방인민회의", "제6조(각급 지방인민위원회의 의무)"]
+
+
+def test_spaced_marker_only_at_line_start():
+    out = normalize_text("이 법 제 6 조에 따른다.")
+    assert "제 6 조" in out
+
+
+def test_bold_wrapped_line_unwrapped():
+    out = normalize_text("다음과 같다.\n**제163조 (중지하였던 소송을 계속할데 대한 판정)**\n재판소는")
+    assert "\n제163조 (중지하였던 소송을 계속할데 대한 판정)\n" in out
+
+
+def test_bare_marker_line_joined_with_space():
+    out = normalize_text("제1장\n합영법의기본\n제2조\n이법은외국투자관계의기본법이다.")
+    assert out.split("\n") == ["제1장 합영법의기본", "제2조 이법은외국투자관계의기본법이다."]

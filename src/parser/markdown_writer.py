@@ -45,6 +45,7 @@ def generate_frontmatter(
     is_authentic: Optional[bool] = None,
     is_ocr: Optional[bool] = None,
     excerpt_articles: Optional[list] = None,
+    date_disputes: Optional[list] = None,
 ) -> str:
     """
     Return a YAML string (without --- delimiters) representing the law's frontmatter.
@@ -130,8 +131,10 @@ def generate_frontmatter(
     data["개정이력"] = amendments
 
     # 원문값은 그대로 두고 외부 자료의 다른 날짜를 함께 적는다(annotations.yaml)
-    if entry.date_disputes:
-        data["날짜이견"] = [dict(d) for d in entry.date_disputes]
+    # date_disputes 가 주어지면(판본별로 거른 목록) 그것을, 아니면 법령 단위 목록을 쓴다
+    disputes = entry.date_disputes if date_disputes is None else date_disputes
+    if disputes:
+        data["날짜이견"] = [dict(d) for d in disputes]
 
     # Optional flag: text unavailable
     if text_unavailable:

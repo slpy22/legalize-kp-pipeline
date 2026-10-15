@@ -124,3 +124,66 @@ def test_excerpt_dates_validated_and_rendered():
     fm = yaml.safe_load(generate_frontmatter(entry, [], "mobu", excerpt_articles=["제19조"]))
     assert fm["발췌본"] is True and fm["발췌조문"] == ["제19조"]
     assert "발췌본" not in yaml.safe_load(generate_frontmatter(entry, [], "mobu"))
+
+
+# ── NKLAWSVC-T9 (7차 #72·#29) ────────────────────────────────────────────────
+
+_HYUNGBEOP = """조선민주주의인민공화국 형법
+주체63(1974)년 12월 19일 최고인민회의 상설회의 결정으로 채택
+주체109(2020)년 11월 26일 최고인민회의 상임위원회 정령 제471호로 수정보충
+제1장 일반규정
+제1조 (사명)
+이 법은 사명을 정한다.
+"""
+
+
+def test_version_action_from_same_day_history():
+    entry = LawEntry(name="형법", category="형·민사")
+    v = LawVersion(date="1974-12-19", action="수정보충", source="mobu",
+                   text=_HYUNGBEOP.split("주체109")[0] + "제1장 일반규정\n제1조 (사명)\n본문\n",
+                   text_available=True)
+    assert _process_version(entry, v, []).action == "채택"
+    v2 = LawVersion(date="2020-11-26", action="수정보충", source="nis", text=_HYUNGBEOP, text_available=True)
+    assert _process_version(entry, v2, []).action == "수정보충"
+
+
+def test_version_action_falls_back_to_enactment_date():
+    text = "조선민주주의인민공화국 개성공업지구법\n제1장 일반규정\n제1조 (사명)\n본문\n"
+    entry = LawEntry(name="개성공업지구법", category="외교·대외경제", enactment_date="2002-11-20")
+    v = LawVersion(date="2002-11-20", action="수정보충", source="mobu", text=text, text_available=True)
+    assert _process_version(entry, v, []).action == "채택"
+
+
+_EFFECTIVE = {"항목": "시행일", "원문값": "2020-11-26", "이견값": "2021-03-01", "출처": "학보 2026-1호"}
+
+
+def test_effective_date_dispute_only_on_versions_with_that_amendment():
+    from main import _check_effective_disputes
+    entry = LawEntry(name="형법", category="형·민사")
+    errors: list[str] = []
+    _attach_annotations([entry], [{"law": "형법", "날짜이견": [dict(_EFFECTIVE)]}], errors)
+    old = LawVersion(date="1974-12-19", action="수정보충", source="mobu",
+                     text=_HYUNGBEOP.split("주체109")[0] + "제1장 일반규정\n제1조 (사명)\n본문\n",
+                     text_available=True)
+    new = LawVersion(date="2020-11-26", action="수정보충", source="nis", text=_HYUNGBEOP, text_available=True)
+    c_old, c_new = _process_version(entry, old, []), _process_version(entry, new, [])
+    fm_old = yaml.safe_load(c_old.content.split("---", 2)[1])
+    fm_new = yaml.safe_load(c_new.content.split("---", 2)[1])
+    assert "날짜이견" not in fm_old
+    assert fm_new["날짜이견"] == [_EFFECTIVE]
+    _check_disputes(c_new, entry, errors)
+    _check_effective_disputes(entry, [c_old, c_new], errors)
+    assert not errors
+    _check_effective_disputes(entry, [c_old], errors)
+    assert len(errors) == 1
+
+
+# ── NKLAWSVC-T10 (8차 #76) 법령집 부문 머리 ───────────────────────────────────
+
+def test_trailing_section_heading_cut():
+    from main import _cut_trailing_section_heading
+    assert _cut_trailing_section_heading("제42조 (분쟁해결)\n해결할수 있다.\n\n교육·문화·\n체육부문") == "제42조 (분쟁해결)\n해결할수 있다."
+    assert _cut_trailing_section_heading("책임을 지운다.\n\n사회복리부문") == "책임을 지운다."
+    # 부문 이름이 아니면 두고, 본문 문장 끝의 '부문' 도 건드리지 않는다
+    assert _cut_trailing_section_heading("본문.\n\n기타부문") == "본문.\n\n기타부문"
+    assert _cut_trailing_section_heading("투자를 늘인다.\n해당 부문") == "투자를 늘인다.\n해당 부문"

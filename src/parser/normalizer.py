@@ -32,6 +32,21 @@ _HANGUL_JOIN_RE = re.compile(
     r"([\uAC00-\uD7A3])"
 )
 
+# Rule 4b: 줄 첫머리 구조 표지의 숫자 앞뒤 공백(전각 포함) 없애기 — 법무부 HWP 일부
+#   예: "제 1 조　조선…", "제 6 조(…)", "제5 장", "제 6절" → "제1조　조선…", "제6조(…)", "제5장", "제6절"
+#   (8차 #75·#77: 헌법 2010·2012, 녀성권리보장법 2010 등 — 조문·장 머리로 인식되지 않아 앞 조문에 섞였다)
+_SPACED_MARKER_RE = re.compile(
+    r"(?m)^([ \t　]*)제(?:[ \t　]+(\d+)[ \t　]*|(\d+)[ \t　]+)([조장절편관])"
+)
+
+# Rule 4c: 마크다운 굵게 표시로 감싼 줄 "**제163조 (…)**" → 표시만 뺀다(법무부 변환본 일부, 8차 #75)
+_BOLD_LINE_RE = re.compile(r"(?m)^([ \t]*)\*\*(.+?)\*\*[ \t]*$")
+
+# Rule 4d: 표지만 있는 줄 + 한글로 시작하는 다음 줄 → 공백으로 잇는다.
+#   Rule 6(한글 줄 잇기)이 '제2조⏎이법은' 을 '제2조이법은' 으로 붙이면 '이' 가 조사로 걸러지고,
+#   '제1장⏎합영법의기본' 은 '제1장합영법의기본' 이 되어 장 머리로 안 잡힌다(외국인투자법·합영법 1999).
+_BARE_MARKER_NL_RE = re.compile(r"(?m)^([ \t　]*제\d+[조장절편관])[ \t　]*\n(?=[ \t　]*[가-힣])")
+
 # Rule 9: Three or more consecutive newlines  →  two newlines
 _MULTI_NL_RE = re.compile(r"\n{3,}")
 
@@ -53,6 +68,11 @@ def normalize_text(text: str) -> str:
     """
     # --- Rule 4: \t followed by optional non-newline whitespace then \n → space
     text = _TAB_NL_RE.sub(" ", text)
+
+    # --- Rules 4b, 4c: 구조 표지 공백·굵게 표시 정리 (줄 잇기 전에 해야 표지로 보호된다) ---
+    text = _BOLD_LINE_RE.sub(r"\1\2", text)
+    text = _SPACED_MARKER_RE.sub(lambda m: f"{m.group(1)}제{m.group(2) or m.group(3)}{m.group(4)}", text)
+    text = _BARE_MARKER_NL_RE.sub(r"\1 ", text)
 
     # --- Rules 1, 2, 3: line-level removals ---
     lines = text.split("\n")

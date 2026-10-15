@@ -70,6 +70,23 @@ def _merge_history_additions(amendments: list[dict], additions: list[dict]) -> l
     return merged
 
 
+# 국정원 2024 법령집의 부문(분류) 이름 — 각 부문 마지막 법령 변환텍스트 끝에 다음 부문의
+# 머리('교육·문화·⏎체육부문')가 붙어 있다(8차 #76, 16판본).
+_NIS_SECTIONS = {
+    "계량·규격·품질감독", "계획·로동·재산관리", "과학기술·지적소유권·체신", "교육·문화·체육", "교통운수",
+    "국토·환경보호", "농업·임업·수산", "보건", "북남경제협력", "사회복리", "에네르기·금속·화학·기계·지하자원",
+    "외교·대외경제", "인민봉사·건설·도시경영", "재정·금융·보험", "재판·인민보안", "주권", "행정", "헌법", "형·민사",
+}
+def _cut_trailing_section_heading(text: str) -> str:
+    """본문 끝 1~4줄이 '<부문 이름>부문'(이름과 정확히 같을 때만)이면 잘라낸다."""
+    lines = text.rstrip().split("\n")
+    for k in range(1, 5):
+        tail = re.sub(r"\s", "", "".join(lines[-k:]))
+        if tail.endswith("부문") and tail[:-2] in _NIS_SECTIONS:
+            return "\n".join(lines[:-k]).rstrip()
+    return text
+
+
 def _number_items_as_headings(body: str) -> str:
     """'1.' '2.' … 로 차례로 이어지는 줄만 '##### N. …' 머리로 바꾼다(번호가 건너뛰면 본문으로 둔다)."""
     expected = 1
@@ -116,8 +133,13 @@ def _process_version(
     # 국정원 법령집 권말 '법령색인'이 각 권 마지막 법령(허풍방지법·황금평, 위화도경제지대법)
     # 변환텍스트 끝에 붙어 있다 — 색인 이후는 본문이 아니므로 잘라낸다.
     raw_text = re.split(r"(?m)^[ \t]*법령색인[ \t]*$", version.text, maxsplit=1)[0]
-    normalized = normalize_text(raw_text)
+    normalized = _cut_trailing_section_heading(normalize_text(raw_text))
     header = parse_header(normalized)
+    # 병합기는 법무부·국정원 판본 action 을 '수정보충'으로 채워 둔다 — 머리 개정이력에
+    # 같은 일자 항목이 있으면 그 내용(채택 등)을 판본 action·커밋 메시지에 쓴다(7차 #72).
+    same_day = [a.action for a in header.amendments if a.date == version.date]
+    if same_day:
+        version.action = same_day[-1]
 
     # Extract body text starting from header.body_start_index
     body_text = normalized[header.body_start_index:]
@@ -187,6 +209,10 @@ def _process_version(
         )
         if chae_date:
             entry.enactment_date = chae_date
+    # 머리 개정이력에 같은 일자 항목이 없어도 채택일이 판본일자면 채택본이다
+    # (예: 개성공업지구법 2002-11-20) — legalize-kp-api import_law_versions 와 같은 규칙
+    if not same_day and version.date and str(entry.enactment_date or "") == version.date:
+        version.action = "채택"
 
     # 본문 마크다운을 먼저 조립한다(조문수를 실제값으로 세기 위해).
     body_md = generate_markdown(tree)
@@ -218,6 +244,9 @@ def _process_version(
         is_ocr=entry.is_ocr or version.is_ocr,
         excerpt_articles=(re.findall(r'(?m)^#{5}\s*(제\d+조)', body_md)
                           if version.date in entry.excerpt_dates else None),
+        # 시행일 이견은 그 개정(원문값=개정이력 일자)이 이력에 있는 판본에만 붙인다
+        date_disputes=[d for d in entry.date_disputes
+                       if d["항목"] != "시행일" or d["원문값"] in {a["일자"] for a in amendments_dicts}],
     )
 
     content = f"---\n{frontmatter_str}---\n\n{body_md}\n"
@@ -335,6 +364,9 @@ def _check_disputes(commit: CommitEntry, entry: LawEntry, errors: list[str]) -> 
     fm = yaml.safe_load(commit.content.split("---", 2)[1]) or {}
     for d in entry.date_disputes:
         item = d["항목"]
+        if item == "시행일":
+            # 원문값 = 시행일 기재가 없는 개정의 이력 일자. 그 개정이 없는 판본엔 붙지 않는다(_check_effective_disputes)
+            continue
         if item.startswith("개정이력"):
             actual = [str(x.get("일자")) for x in fm.get("개정이력") or []]
             ok = d["원문값"] in actual
@@ -343,6 +375,20 @@ def _check_disputes(commit: CommitEntry, entry: LawEntry, errors: list[str]) -> 
             ok = actual == d["원문값"]
         if not ok:
             errors.append(f"{entry.name} ({commit.date}): 날짜이견 {item} 원문값 {d['원문값']} ≠ frontmatter {actual}")
+
+
+def _check_effective_disputes(entry: LawEntry, commits: list[CommitEntry], errors: list[str]) -> None:
+    """시행일 이견이 그 법령의 판본 가운데 적어도 하나의 frontmatter 날짜이견에 들어갔는지 본다."""
+    for d in entry.date_disputes:
+        if d["항목"] != "시행일":
+            continue
+        hits = 0
+        for c in commits:
+            fm = yaml.safe_load(c.content.split("---", 2)[1]) or {}
+            if any(x.get("항목") == "시행일" and x.get("원문값") == d["원문값"] for x in fm.get("날짜이견") or []):
+                hits += 1
+        if hits == 0:
+            errors.append(f"{entry.name}: 날짜이견 시행일 원문값 {d['원문값']} 이 어느 판본 개정이력에도 없음")
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +445,7 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False, emit_
             )
             entry.versions = [placeholder_version]
 
+        entry_commits: list[CommitEntry] = []
         for version in entry.versions:
             try:
                 commit = _process_version(entry, version, constitutional_names)
@@ -406,10 +453,12 @@ def run_pipeline(config_path: str = "config.yaml", skip_git: bool = False, emit_
                 _check_disputes(commit, entry, correction_errors)
                 _check_history_additions(commit, entry, correction_errors)
                 commits.append(commit)
+                entry_commits.append(commit)
             except Exception as exc:
                 msg = f"  [FAIL] {entry.name} ({version.date}): {exc}"
                 print(msg)
                 failures.append(msg)
+        _check_effective_disputes(entry, entry_commits, correction_errors)
 
         processed += 1
         if processed % 50 == 0:
